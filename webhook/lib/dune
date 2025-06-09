@@ -1,0 +1,4 @@
+(library
+ (name webhook)
+ (libraries dream yojson lwt cohttp-lwt-unix uri)
+ (preprocess (pps lwt_ppx ppx_deriving_yojson)))
