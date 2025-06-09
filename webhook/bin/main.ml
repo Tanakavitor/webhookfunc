@@ -1,5 +1,4 @@
 open Cohttp_lwt_unix
-
 type request_body = {
   event          : string;
   transaction_id : string;
@@ -7,6 +6,7 @@ type request_body = {
   currency       : string;
   timestamp      : string;
 } [@@deriving yojson]
+
 
 let make_request url json_data =
   let headers = Cohttp.Header.init_with "content-type" "application/json" in
@@ -17,7 +17,6 @@ let make_request url json_data =
   Lwt.return (status, body_string)
 
 let duplicate_list = ref []
-
 let add_to_duplicate_list item =
   duplicate_list := item :: !duplicate_list
 
@@ -29,45 +28,61 @@ let extract_transaction_id body =
   try
     Yojson.Safe.(from_string body |> Util.member "transaction_id" |> Util.to_string)
   with
-  | _ -> ""
+  | _ -> " "
 
 let post_handler req =
   let%lwt body = Dream.body req in
-  match Yojson.Safe.from_string body |> request_body_of_yojson with
-  | Ok data ->
-      let amount_float = Float.of_string data.amount in
-      let transaction_id = data.transaction_id in
-      
-      if contains transaction_id !duplicate_list then (
-        let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
-        let%lwt (_status, _response) = make_request 
-          "http://127.0.0.1:5001/cancelar" 
-          cancel_json in
-        Dream.respond ~status:`Bad_Request "Duplicate transaction"
-      ) else (
-        add_to_duplicate_list transaction_id;        
-        if amount_float <= 0.0 then (
-          let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
-          let%lwt (_status, _response) = make_request 
-            "http://127.0.0.1:5001/cancelar" 
-            cancel_json in
-          Dream.respond ~status:`Bad_Request "Invalid amount"
-        ) else (
-          let%lwt (_status, _response) = make_request 
-            "http://127.0.0.1:5001/confirmar" 
-            body in
-          Dream.respond "Success"
-        )
-      )
+  (* VALIDAÇÃO DE TOKEN *)
+  let token_header = Dream.header req "X-Webhook-Token" in
+  let expected_token = "meu-token-secreto" in
+  match token_header with
+  | Some token when token = expected_token ->
+      (* Token válido: processa webhook *)
+      (match Yojson.Safe.from_string body |> request_body_of_yojson with
+      | Ok data ->
+          let amount_float = Float.of_string data.amount in
+          let transaction_id = data.transaction_id in
+          if contains transaction_id !duplicate_list then (
+            let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+            let%lwt (_status, _response) = make_request 
+              "http://127.0.0.1:5001/cancelar" 
+              cancel_json in
+            Dream.respond ~status:`Bad_Request "Duplicate transaction"
+          ) else (
+            add_to_duplicate_list transaction_id;        
+            if amount_float <= 0.0 then (
+              let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+              let%lwt (_status, _response) = make_request 
+                "http://127.0.0.1:5001/cancelar" 
+                cancel_json in
+              Dream.respond ~status:`Bad_Request "Invalid amount"
+            ) else (
+              let%lwt (_status, _response) = make_request 
+                "http://127.0.0.1:5001/confirmar" 
+                body in
+              Dream.respond "Success"
+            )
+          )
 
-  | Error msg ->
+      | Error msg ->
+          let transaction_id = extract_transaction_id body in
+          let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+          let%lwt (_status, _response) = make_request
+            "http://127.0.0.1:5001/cancelar"
+            cancel_json
+          in
+          Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
+      )
+  
+  | _ ->
+      (* Token inválido ou ausente: cancela *)
       let transaction_id = extract_transaction_id body in
       let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
       let%lwt (_status, _response) = make_request
         "http://127.0.0.1:5001/cancelar"
         cancel_json
       in
-      Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
+      Dream.respond ~status:`Bad_Request "Invalid or missing token"
 
 let () =
   Dream.run
