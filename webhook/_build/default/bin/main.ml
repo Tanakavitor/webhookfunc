@@ -25,66 +25,53 @@ let rec contains element = function
   | a::c -> if (a = element) then true else (contains element c)   
   | []   -> false
 
+let extract_transaction_id body =
+  try
+    Yojson.Safe.(from_string body |> Util.member "transaction_id" |> Util.to_string)
+  with
+  | _ -> ""
+
 let post_handler req =
   let%lwt body = Dream.body req in
   match Yojson.Safe.from_string body |> request_body_of_yojson with
   | Ok data ->
-      (* converte string → float *)
       let amount_float = Float.of_string data.amount in
       let transaction_id = data.transaction_id in
-
-      (* verifica se já existe na lista de duplicados *)
+      
       if contains transaction_id !duplicate_list then (
-        (* Se for duplicado, cancela *)
+        (* Duplicado: cancela *)
         let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
         let%lwt (_status, _response) = make_request 
           "http://127.0.0.1:5001/cancelar" 
           cancel_json in
         Dream.respond ~status:`Bad_Request "Duplicate transaction"
       ) else (
-        (* Adiciona na lista *)
+        (* Adiciona à lista para evitar duplicatas futuras *)
         add_to_duplicate_list transaction_id;
         
-        (* escolhe endpoint de confirmação ou cancelamento *)
-        let endpoint =
-          if amount_float <= 0.0 then "/cancelar"
-          else "/confirmar"
-        in
-
-        (* envia para o serviço externo *)
-        let url = "http://127.0.0.1:5001" ^ endpoint in
-        let json_to_send = 
-          if amount_float <= 0.0 then
-            Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id
-          else
-            body
-        in
-        let%lwt (_status, _response) = make_request url json_to_send in
-
-        (* resposta ao chamador *)
-        if amount_float <= 0.0 then
+        (* Processa transação baseado no amount *)
+        if amount_float <= 0.0 then (
+          (* Amount inválido: cancela *)
+          let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+          let%lwt (_status, _response) = make_request 
+            "http://127.0.0.1:5001/cancelar" 
+            cancel_json in
           Dream.respond ~status:`Bad_Request "Invalid amount"
-        else
+        ) else (
+          (* Amount válido: confirma *)
+          let%lwt (_status, _response) = make_request 
+            "http://127.0.0.1:5001/confirmar" 
+            body in
           Dream.respond "Success"
+        )
       )
 
   | Error msg ->
-      (* Tenta extrair transaction_id mesmo com JSON inválido *)
-      let cancel_json = 
-        try
-          let partial_json = Yojson.Safe.from_string body in
-          match Yojson.Safe.Util.(partial_json |> member "transaction_id" |> to_string_option) with
-          | Some txn_id ->
-              Printf.sprintf "{\"transaction_id\":\"%s\"}" txn_id
-          | None ->
-              "{\"transaction_id\":\"parsing_error\"}"
-        with
-        | _ -> "{\"transaction_id\":\"parsing_error\"}"
-      in
-      let%lwt (_status, _response) =
-        make_request
-          "http://127.0.0.1:5001/cancelar"
-          cancel_json
+      let transaction_id = extract_transaction_id body in
+      let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+      let%lwt (_status, _response) = make_request
+        "http://127.0.0.1:5001/cancelar"
+        cancel_json
       in
       Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
 
