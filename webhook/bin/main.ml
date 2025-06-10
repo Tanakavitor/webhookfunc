@@ -7,7 +7,6 @@ type request_body = {
   timestamp      : string;
 } [@@deriving yojson]
 
-
 let make_request url json_data =
   let headers = Cohttp.Header.init_with "content-type" "application/json" in
   let body = Cohttp_lwt.Body.of_string json_data in
@@ -17,9 +16,9 @@ let make_request url json_data =
   Lwt.return (status, body_string)
 
 let duplicate_list = ref []
+
 let add_to_duplicate_list item =
   duplicate_list := item :: !duplicate_list
-
 let rec contains element = function
   | a::c -> if (a = element) then true else (contains element c)   
   | []   -> false
@@ -28,7 +27,7 @@ let extract_transaction_id body =
   try
     Yojson.Safe.(from_string body |> Util.member "transaction_id" |> Util.to_string)
   with
-  | _ -> " "
+  | _ -> ""
 
 let post_handler req =
   let%lwt body = Dream.body req in
@@ -37,7 +36,6 @@ let post_handler req =
   let expected_token = "meu-token-secreto" in
   match token_header with
   | Some token when token = expected_token ->
-      (* Token válido: processa webhook *)
       (match Yojson.Safe.from_string body |> request_body_of_yojson with
       | Ok data ->
           let amount_float = Float.of_string data.amount in
@@ -66,23 +64,31 @@ let post_handler req =
 
       | Error msg ->
           let transaction_id = extract_transaction_id body in
-          let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
-          let%lwt (_status, _response) = make_request
-            "http://127.0.0.1:5001/cancelar"
-            cancel_json
-          in
-          Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
+          if transaction_id = "" then (
+            Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
+          ) else (
+            let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+            let%lwt (_status, _response) = make_request
+              "http://127.0.0.1:5001/cancelar"
+              cancel_json
+            in
+            Dream.respond ~status:`Bad_Request ("Invalid JSON: " ^ msg)
+          )
       )
   
   | _ ->
-      (* Token inválido ou ausente: cancela *)
+      (* Token inválido ou ausente *)
       let transaction_id = extract_transaction_id body in
-      let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
-      let%lwt (_status, _response) = make_request
-        "http://127.0.0.1:5001/cancelar"
-        cancel_json
-      in
-      Dream.respond ~status:`Bad_Request "Invalid or missing token"
+      if transaction_id = "" then (
+        Dream.respond ~status:`Bad_Request "Invalid or missing token"
+      ) else (
+        let cancel_json = Printf.sprintf "{\"transaction_id\":\"%s\"}" transaction_id in
+        let%lwt (_status, _response) = make_request
+          "http://127.0.0.1:5001/cancelar"
+          cancel_json
+        in
+        Dream.respond ~status:`Bad_Request "Invalid or missing token"
+      )
 
 let () =
   Dream.run
