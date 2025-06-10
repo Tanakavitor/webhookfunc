@@ -140,3 +140,5 @@ flowchart TD
     R200 --> G
     R400 --> G
 ```
+## AI
+Este projeto foi desenvolvido com a ajuda do uso de ferramentas de inteligência artificial nas partes de geração de código e de documentação.
